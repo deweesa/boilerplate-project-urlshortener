@@ -72,10 +72,11 @@ app.post('/api/shorturl', async (req, res) => {
   }
 
   const abbrvUrl = fullUrl.replace(protcolFinder, '');
+  console.log(abbrvUrl);
 
   async function dnsLookupPromise(){
     return new Promise((resolve, reject) => {
-      dns.lookup(abbrvUrl, options, (err, address) => {
+      dns.lookup(abbrvUrl, options, (err, addresses) => {
         if (err) reject(err);
         resolve(address);
       });
