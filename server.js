@@ -47,7 +47,7 @@ const options = {
   hints: dns.ADDRCONFIG | dns.V4MAPPED
 }
 const error = {error: 'invalid url'}
-const hyperTextFinder = /(http)s*:\/\//;
+const protcolFinder = /((http)s*)*(ftp)*:\/\/*/;
 
 let UrlPair = mongoose.model('UrlPair', urlSchema);
 
@@ -66,12 +66,12 @@ app.post('/api/shorturl', async (req, res) => {
   console.log(req.body.url);
   
   const fullUrl = req.body.url;
-  if(fullUrl.search(hyperTextFinder) === -1){
+  if(fullUrl.search(protcolFinder) === -1){
     res.json(error);
     return;
   }
 
-  const abbrvUrl = fullUrl.replace(hyperTextFinder, '');
+  const abbrvUrl = fullUrl.replace(protcolFinder, '');
 
   async function dnsLookupPromise(){
     return new Promise((resolve, reject) => {
