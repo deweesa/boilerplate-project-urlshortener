@@ -11,6 +11,8 @@ app.use(bodyParser.json());
 const mongoose = require('mongoose');
 const { doesNotMatch } = require('assert');
 const { callbackify } = require('util');
+const { Http2ServerRequest } = require('http2');
+const { url } = require('inspector');
 const { Schema } = mongoose;
 
 const urlSchema = new Schema({
@@ -20,7 +22,7 @@ const urlSchema = new Schema({
 
 mongoose.connect(process.env.MONGO_URI, {useNewUrlParser: true})
 .catch((err) => {
-  console.log(`cant connect to mongodb. error: $(err)`);
+  console.log(`cant connect to mongodb. error: ${err}`);
 })
 
 
@@ -40,60 +42,136 @@ app.get('/api/hello', function(req, res) {
   res.json({ greeting: 'hello API' });
 });
 
-app.post('/api/shorturl', (req, res) => {
-  const options = {
-    family: 6,
-    hints: dns.ADDRCONFIG | dns.V4MAPPED
-  }
+const options = {
+  family: 6,
+  hints: dns.ADDRCONFIG | dns.V4MAPPED
+}
+const error = {error: 'invalid url'}
+const hyperTextFinder = /(http)s*:\/\//;
 
-  let UrlPair = mongoose.model('UrlPair', urlSchema);
+let UrlPair = mongoose.model('UrlPair', urlSchema);
 
-  
+async function shorturlLookupPromise(shorturl){
+  return new Promise((resolve, reject) => {
+    UrlPair.findOne({short_url: shorturl}, (err, data) => {
+      if (err) reject(err);
+      resolve(data);
+    });
+  });
+};
 
-  const error = {error: 'invalid url'};
+app.post('/api/shorturl', async (req, res) => {
+
   var message;
-
   console.log(req.body.url);
-
-  const fullUrl = req.body.url
-  if (fullUrl.search(/(http)s*:\/\//) === -1) {
+  
+  const fullUrl = req.body.url;
+  if(fullUrl.search(hyperTextFinder) === -1){
     res.json(error);
     return;
   }
 
-  const abbreviated = fullUrl.replace(/(http)s*:\/\//, '');
+  const abbrvUrl = fullUrl.replace(hyperTextFinder, '');
 
-  console.log(`full url: ${fullUrl}\nabrv url: ${abbreviated}`)
-  dns.lookup(abbreviated, options, (err, address) => {
-    if (err) message = error;
-    message = {orginal_url: fullUrl, short_url: 0}
+  async function dnsLookupPromise(){
+    return new Promise((resolve, reject) => {
+      dns.lookup(abbrvUrl, options, (err, address) => {
+        if (err) reject(err);
+        resolve(address);
+      });
+    });
+  };
 
-    //need to check to see if it's in the database, 
-    //  -> NO: generate short_url id
-    //      |-> check to see if id is already assigned to url
-    //      |       -> YES: put in db
-    //      |       ->  NO: create new short url try again
-    //  -> YES: return url and short url from db
+  try{
+    const address = await dnsLookupPromise();
+    console.log(`address: ${address}`)
+  }catch(err){
+    console.error(err);
+    res.json(error);
+    return;
+  }
 
-    //check to see if url is in db
-    var queryResult = UrlPair.find({original_url: fullUrl}).exec();
+  //Now have valid url
 
-    console.log(`result: ${queryResult}`);
-    var isEmpty = queryResult.then((doc) => {
-      console.log(doc);
-      console.log('in the queryresult then');
-    })
+  //Check to see if the url is in the database
+  async function fullUrlLookupPromise(fullUrl){
+    return new Promise((resolve, reject) => {
+      UrlPair.findOne({original_url: fullUrl}, (err, data) => {
+        if (err) reject(err);
+        resolve(data);
+      });
+    });
+  };
 
-    console.log(isEmpty);
+  var urlPairDocument = null;
+  try{
+    urlPairDocument = await fullUrlLookupPromise(fullUrl);
+    console.log(`the document found: ${urlPairDocument}`);
+  } catch(err){
+    console.error(err);
+    res.json(error);
+    return;
+  }
 
-    //console.log(queryResult);
-    //if(!queryResult) console.log('no documents');
-    res.json(message);
-  })
+  if(urlPairDocument !== null) {
+    let {original_url, short_url} = urlPairDocument;
+    res.json({original_url, short_url})
+    return;
+  } 
+
+  urlPairDocument = 1;
+
+  while(urlPairDocument !== null) {
+    var short_url = Math.floor(Math.random() * 999) + 1; //[0 - 1000)
+    console.log(`potential short_url: ${short_url}`)
+    try {
+      urlPairDocument = await shorturlLookupPromise(short_url);
+    } catch(err){
+      console.error(err);
+      res.json(error);
+      return;
+    }
+  }
+
+  let newMapping = new UrlPair({
+    original_url: fullUrl,
+    short_url: short_url
+  });
+
+  newMapping.save((err, data) => {
+    if(err) return console.error(err);
+  });
+
+  res.json({original_url: fullUrl, short_url: short_url});
 });
 
+app.get('/api/shorturl/:short_url', async (req, res) => {
+  console.log(typeof req.params.short_url);
+  let isnum = /^\d+$/.test(req.params.short_url);
+  if(!isnum) {
+    res.json({error: 'Wrong format'});
+    return;
+  }
+
+  const shortUrl = parseInt(req.params.short_url);
+
+  var urlPairDocument;
+
+  try {
+    urlPairDocument = await shorturlLookupPromise(shortUrl);
+  } catch(err) {
+    console.error(err);
+    res.json(error);
+    return;
+  }
+
+  if(urlPairDocument === null) {
+    res.json(error);
+  } else {
+    res.redirect(urlPairDocument.original_url);
+  }
+});
 
 app.listen(port, function() {
   console.log(`Listening on port ${port}`);
 });
-
